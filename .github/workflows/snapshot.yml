@@ -1,0 +1,68 @@
+name: Steam Snapshot
+
+# 结算：到点抓取 Steam 累计数据并存为快照，划清战报统计窗口的边界；多账号各自存桶，新账号自动建基线。
+# GitHub Actions 的 cron 使用 UTC，北京 0 点 = 前一日 16:00 UTC。
+# 想改结算时间：UTC = 北京时间 - 8 小时（换算示例见仓库 ADVANCED.md），定时有几分钟延迟属正常。
+on:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+# actions:read 用于下载历史 Artifact 快照；无需仓库写权限
+permissions:
+  actions: read
+  contents: read
+
+# 与战报工作流共用同一份快照 Artifact，防止并发读写
+concurrency:
+  group: steam-report-state
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: 恢复上次快照
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 查找最新一份未过期的 steam-report-state Artifact
+          JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=steam-report-state&per_page=20")
+          URL=$(echo "$JSON" | jq -r '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].archive_download_url // empty')
+          if [ -n "$URL" ]; then
+            mkdir -p data
+            gh api "${URL}" > /tmp/state.zip
+            unzip -o /tmp/state.zip -d data
+            echo "✅ 已恢复上次快照："
+            ls -l data
+          else
+            echo "🆕 未找到历史快照，本次将初始化基线"
+          fi
+
+      - name: 抓取并存快照
+        id: snapshot
+        env:
+          STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+          STEAM_ID: ${{ secrets.STEAM_ID }}
+          NOTIFY_WEBHOOK: ${{ secrets.NOTIFY_WEBHOOK }}
+          NOTIFY_SECRET: ${{ secrets.NOTIFY_SECRET }}
+          REPORT_TIMEZONE: ${{ vars.REPORT_TIMEZONE }}
+        run: node scripts/snapshot.js
+
+      - name: 上传最新快照
+        if: steps.snapshot.outputs.state_updated == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: steam-report-state
+          path: data/state.json
+          retention-days: 90
+          if-no-files-found: ignore
