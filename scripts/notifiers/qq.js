@@ -3,6 +3,8 @@
 //   不传 group 则推送到绑定机器人的 QQ 单聊；传 group 推送到对应 QQ 群（需先在控制台绑定群）。
 // 接口文档：https://qmsg.zendee.cn/docs  （GET/POST /v3/send/{key} 或 POST /v3/jsend/{key}，JSON { msg, group }）
 import { postJson } from "./http.js";
+import { formatMinutes } from "../diff.js";
+import { formatZhDate, sanitize } from "../text.js";
 import { buildInitMarkdown, buildReportMarkdown } from "./markdown.js";
 
 // Qmsg 单条消息上限 1800 字符，留少量余量（按字符截断）
@@ -32,11 +34,83 @@ const buildQmsgPayload = ({ title, text }) => ({
   msg: truncateChars(`${title}\n\n${text}`),
 });
 
+// QQ 客户端不渲染 Markdown，星号/井号会原样显示；这里构建纯文本卡片：
+// 标题只出现一次（由 title 带出），正文用 emoji + 缩进突出关键信息。
+const MAX_PLAYED_GAMES = 15;
+const MAX_ACHIEVEMENT_NAMES = 8;
+const MAX_LIBRARY_NAMES = 10;
+
+/** 每日战报 → QQ 纯文本 { title, text }；入参结构同 buildReportMarkdown */
+export function buildQqReport({ personaName, reportDate, diff, achievements, generatedAt, timeZone, windowNote = "", extras = {} }) {
+  const { titleText = "", mvp = null, milestoneLines = [], lastPlayed = null } = extras;
+  const played = diff.playedToday ?? [];
+  const withNew = (achievements ?? []).filter((a) => a.added.length > 0);
+  const totalNew = withNew.reduce((sum, a) => sum + a.added.length, 0);
+  const lines = [];
+
+  if (played.length > 0) {
+    const titleSuffix = titleText ? ` · ${titleText}` : "";
+    lines.push(`【${sanitize(personaName)}】当日游玩 ${formatMinutes(diff.totalTodayMinutes)}（${played.length} 款游戏）${titleSuffix}`);
+    played.slice(0, MAX_PLAYED_GAMES).forEach((g, i) => {
+      const isMvp = mvp && g.appId === mvp.appId;
+      const share = isMvp && mvp.sharePercent != null ? `（今日 ${mvp.sharePercent}%）` : "";
+      const badge = isMvp ? " 🏅" : "";
+      lines.push(`${i + 1}. ${sanitize(g.name)}${badge}　+${formatMinutes(g.todayMinutes)}（累计 ${formatMinutes(g.totalMinutes)}${share}）`);
+    });
+    if (played.length > MAX_PLAYED_GAMES) lines.push(`… 共 ${played.length} 款有时长增量，仅列前 ${MAX_PLAYED_GAMES} 款`);
+  } else {
+    lines.push(`【${sanitize(personaName)}】今日未启动游戏，休息日 📚`);
+    if (lastPlayed) lines.push(`上次游玩：${sanitize(lastPlayed.name)} · ${lastPlayed.lastDate}`);
+  }
+
+  if (withNew.length > 0) {
+    lines.push("", `🏆 新解锁成就 ${totalNew} 个`);
+    withNew.forEach((a) => {
+      const names = a.added
+        .slice(0, MAX_ACHIEVEMENT_NAMES)
+        .map((item) => `「${sanitize(item.displayName)}」`)
+        .join("、");
+      const more = a.added.length > MAX_ACHIEVEMENT_NAMES ? ` 等 ${a.added.length} 个` : "";
+      lines.push(`   · ${sanitize(a.gameName)}（${a.unlockedCount}/${a.total}）：${names}${more}`);
+    });
+  }
+
+  if (milestoneLines.length > 0) {
+    lines.push("", "🎖 今日里程碑");
+    milestoneLines.forEach((line) => lines.push(`   · ${line}`));
+  }
+
+  if (diff.newLibraryGames?.length > 0) {
+    const names = diff.newLibraryGames
+      .slice(0, MAX_LIBRARY_NAMES)
+      .map((g) => sanitize(g.name))
+      .join("、");
+    const more = diff.newLibraryGames.length > MAX_LIBRARY_NAMES ? ` 等 ${diff.newLibraryGames.length} 款` : "";
+    lines.push("", `📦 新增入库 ${diff.newLibraryGames.length} 款：${names}${more}`);
+  }
+
+  lines.push("", `📊 库存 ${diff.library.gameCount} 款 ｜ 总时长 ${formatMinutes(diff.library.totalMinutes)}`);
+  lines.push(`🕐 数据来自 Steam · ${windowNote}生成于 ${generatedAt}（${timeZone}）`);
+
+  return { title: `🎮 Steam 每日战报 · ${formatZhDate(reportDate)}`, text: lines.join("\n") };
+}
+
+/** 首次运行存档消息 → QQ 纯文本 */
+export function buildQqInit({ personaName, library, perfectCount }) {
+  const lines = [
+    `【${sanitize(personaName)}】的玩家档案已建立 📂`,
+    `库存 ${library.gameCount} 款游戏 · 总时长 ${formatMinutes(library.totalMinutes)}`,
+  ];
+  if (typeof perfectCount === "number") lines.push(`🏆 全成就 ${perfectCount} 款`);
+  lines.push("明天开始，每日战报准时送达 ✅");
+  return { title: "🎮 战报存档已创建", text: lines.join("\n") };
+}
+
 export const qq = {
   name: "qq",
   matches: (webhook) => /qmsg\.zendee\.cn/.test(webhook),
-  buildReport: (data) => buildQmsgPayload(buildReportMarkdown(data)),
-  buildInit: (data) => buildQmsgPayload(buildInitMarkdown(data)),
+  buildReport: (data) => buildQmsgPayload(buildQqReport(data)),
+  buildInit: (data) => buildQmsgPayload(buildQqInit(data)),
   async send({ webhook, payload }) {
     const { key, group, origin } = extractTarget(webhook);
     if (!key) {
