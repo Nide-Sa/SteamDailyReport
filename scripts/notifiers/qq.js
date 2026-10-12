@@ -40,43 +40,50 @@ const MAX_PLAYED_GAMES = 15;
 const MAX_ACHIEVEMENT_NAMES = 8;
 const MAX_LIBRARY_NAMES = 10;
 
+// 字符画分隔线与区块前缀，用于纯文本卡片的视觉分区
+const DIVIDER = "━━━━━━━━━━━━━━━━";
+const BLOCK = "▎";
+
 /** 每日战报 → QQ 纯文本 { title, text }；入参结构同 buildReportMarkdown */
 export function buildQqReport({ personaName, reportDate, diff, achievements, generatedAt, timeZone, windowNote = "", extras = {} }) {
   const { titleText = "", mvp = null, milestoneLines = [], lastPlayed = null } = extras;
   const played = diff.playedToday ?? [];
   const withNew = (achievements ?? []).filter((a) => a.added.length > 0);
   const totalNew = withNew.reduce((sum, a) => sum + a.added.length, 0);
-  const lines = [];
+  const lines = [DIVIDER];
 
   if (played.length > 0) {
-    const titleSuffix = titleText ? ` · ${titleText}` : "";
-    lines.push(`【${sanitize(personaName)}】当日游玩 ${formatMinutes(diff.totalTodayMinutes)}（${played.length} 款游戏）${titleSuffix}`);
+    lines.push(`👤 ${sanitize(personaName)} ｜ 🔥 ${titleText || "今日有游玩"}`);
+    lines.push(`⏱ 当日游玩 ${formatMinutes(diff.totalTodayMinutes)} · ${played.length} 款游戏`);
+    lines.push(DIVIDER, `${BLOCK}🎮 今日游玩`);
     played.slice(0, MAX_PLAYED_GAMES).forEach((g, i) => {
       const isMvp = mvp && g.appId === mvp.appId;
-      const share = isMvp && mvp.sharePercent != null ? `（今日 ${mvp.sharePercent}%）` : "";
+      const share = isMvp && mvp.sharePercent != null ? ` · 今日 ${mvp.sharePercent}%` : "";
       const badge = isMvp ? " 🏅" : "";
-      lines.push(`${i + 1}. ${sanitize(g.name)}${badge}　+${formatMinutes(g.todayMinutes)}（累计 ${formatMinutes(g.totalMinutes)}${share}）`);
+      lines.push(`${i + 1}. ${sanitize(g.name)}${badge}`);
+      lines.push(`   +${formatMinutes(g.todayMinutes)} · 累计 ${formatMinutes(g.totalMinutes)}${share}`);
     });
     if (played.length > MAX_PLAYED_GAMES) lines.push(`… 共 ${played.length} 款有时长增量，仅列前 ${MAX_PLAYED_GAMES} 款`);
   } else {
-    lines.push(`【${sanitize(personaName)}】今日未启动游戏，休息日 📚`);
+    lines.push(`👤 ${sanitize(personaName)} ｜ 📚 休息日`);
+    lines.push("当日未启动任何游戏");
     if (lastPlayed) lines.push(`上次游玩：${sanitize(lastPlayed.name)} · ${lastPlayed.lastDate}`);
   }
 
   if (withNew.length > 0) {
-    lines.push("", `🏆 新解锁成就 ${totalNew} 个`);
+    lines.push("", `${BLOCK}🏆 新解锁成就 ${totalNew} 个`);
     withNew.forEach((a) => {
       const names = a.added
         .slice(0, MAX_ACHIEVEMENT_NAMES)
         .map((item) => `「${sanitize(item.displayName)}」`)
         .join("、");
       const more = a.added.length > MAX_ACHIEVEMENT_NAMES ? ` 等 ${a.added.length} 个` : "";
-      lines.push(`   · ${sanitize(a.gameName)}（${a.unlockedCount}/${a.total}）：${names}${more}`);
+      lines.push(`   · ${sanitize(a.gameName)} ${a.unlockedCount}/${a.total}：${names}${more}`);
     });
   }
 
   if (milestoneLines.length > 0) {
-    lines.push("", "🎖 今日里程碑");
+    lines.push("", `${BLOCK}🎖 今日里程碑`);
     milestoneLines.forEach((line) => lines.push(`   · ${line}`));
   }
 
@@ -86,10 +93,11 @@ export function buildQqReport({ personaName, reportDate, diff, achievements, gen
       .map((g) => sanitize(g.name))
       .join("、");
     const more = diff.newLibraryGames.length > MAX_LIBRARY_NAMES ? ` 等 ${diff.newLibraryGames.length} 款` : "";
-    lines.push("", `📦 新增入库 ${diff.newLibraryGames.length} 款：${names}${more}`);
+    lines.push("", `${BLOCK}📦 新增入库 ${diff.newLibraryGames.length} 款`, `   ${names}${more}`);
   }
 
-  lines.push("", `📊 库存 ${diff.library.gameCount} 款 ｜ 总时长 ${formatMinutes(diff.library.totalMinutes)}`);
+  lines.push("", DIVIDER);
+  lines.push(`📊 库存 ${diff.library.gameCount} 款 ｜ 总时长 ${formatMinutes(diff.library.totalMinutes)}`);
   lines.push(`🕐 数据来自 Steam · ${windowNote}生成于 ${generatedAt}（${timeZone}）`);
 
   return { title: `🎮 Steam 每日战报 · ${formatZhDate(reportDate)}`, text: lines.join("\n") };
@@ -98,11 +106,12 @@ export function buildQqReport({ personaName, reportDate, diff, achievements, gen
 /** 首次运行存档消息 → QQ 纯文本 */
 export function buildQqInit({ personaName, library, perfectCount }) {
   const lines = [
-    `【${sanitize(personaName)}】的玩家档案已建立 📂`,
-    `库存 ${library.gameCount} 款游戏 · 总时长 ${formatMinutes(library.totalMinutes)}`,
+    DIVIDER,
+    `👤 ${sanitize(personaName)} 的玩家档案已建立 📂`,
+    `📚 库存 ${library.gameCount} 款游戏 · 总时长 ${formatMinutes(library.totalMinutes)}`,
   ];
   if (typeof perfectCount === "number") lines.push(`🏆 全成就 ${perfectCount} 款`);
-  lines.push("明天开始，每日战报准时送达 ✅");
+  lines.push(DIVIDER, "✅ 明天开始，每日战报准时送达");
   return { title: "🎮 战报存档已创建", text: lines.join("\n") };
 }
 
